@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Optional
 from pydantic import UUID4, Field
 
 from workout_api.contrib.schemas import BaseSchema
@@ -23,5 +23,22 @@ class CentroTreinamentoAtleta(BaseSchema):
         str, Field(description="Nome do centro de treinamento", example="CT King", max_length=20)
     ]
 
+
 class CentroTreinamentoOut(CentroTreinamentoIn):
-    id: Annotated[UUID4, Field(description = "Identificador do centro de treinamento")]
+    id: Annotated[UUID4, Field(description="Identificador do centro de treinamento")]
+
+
+class CentroTreinamentoUpdate(BaseSchema):
+    nome: Annotated[
+        Optional[str],
+        Field(None, description="Nome do centro de treinamento", example="CT King", max_length=20),
+    ]
+    proprietario: Annotated[
+        Optional[str],
+        Field(
+            None,
+            description="Proprietário do centro de treinamento",
+            example="Marcos",
+            max_length=30,
+        ),
+    ]
