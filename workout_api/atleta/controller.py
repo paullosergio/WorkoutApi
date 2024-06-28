@@ -1,10 +1,13 @@
+from typing import Optional
 from uuid import uuid4
 from datetime import datetime
-from fastapi import APIRouter, Body, HTTPException, status
+from fastapi import APIRouter, Body, Query, HTTPException, status
+from fastapi_pagination import Page, paginate
 from pydantic import UUID4
 from sqlalchemy.future import select
+from sqlalchemy.exc import IntegrityError
 
-from workout_api.atleta.schemas import AtletaIn, AtletaOut, AtletaUpdate
+from workout_api.atleta.schemas import AtletaIn, AtletaOut, AtletaUpdate, AtletaCustom
 from workout_api.atleta.models import AtletaModel
 from workout_api.categoria.models import CategoriaModel
 from workout_api.categoria.schemas import CategoriaOut
@@ -18,17 +21,13 @@ router = APIRouter()
 @router.post(
     "/", summary="Criar novo atleta", status_code=status.HTTP_201_CREATED, response_model=AtletaOut
 )
-async def post(db_session: DataBaseDependency, atleta_in: AtletaIn = Body(...)) -> AtletaOut:
+async def post(
+    db_session: DataBaseDependency,
+    atleta_in: AtletaIn = Body(...),
+) -> AtletaOut:
     nome_categoria = atleta_in.categoria.nome
-    nome_centro_treinamento = atleta_in.centro_treinamento.nome
     categoria: CategoriaOut = (
-        (
-            (
-                await db_session.execute(
-                    select(CategoriaModel).filter_by(nome=atleta_in.categoria.nome)
-                )
-            )
-        )
+        ((await db_session.execute(select(CategoriaModel).filter_by(nome=nome_categoria))))
         .scalars()
         .first()
     )
@@ -38,11 +37,12 @@ async def post(db_session: DataBaseDependency, atleta_in: AtletaIn = Body(...)) 
             detail=f"A categoria '{nome_categoria}' não foi encontrada.",
         )
 
+    nome_centro_treinamento = atleta_in.centro_treinamento.nome
     centro_treinamento: CentroTreinamentoOut = (
         (
             (
                 await db_session.execute(
-                    select(CentroTreinamentoModel).filter_by(nome=atleta_in.centro_treinamento.nome)
+                    select(CentroTreinamentoModel).filter_by(nome=nome_centro_treinamento)
                 )
             )
         )
@@ -59,8 +59,15 @@ async def post(db_session: DataBaseDependency, atleta_in: AtletaIn = Body(...)) 
     atleta_model.categoria_id = categoria.pk_id
     atleta_model.centro_treinamento_id = centro_treinamento.pk_id
 
-    db_session.add(atleta_model)
-    await db_session.commit()
+    try:
+        db_session.add(atleta_model)
+        await db_session.commit()
+    except IntegrityError:
+        await db_session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_303_SEE_OTHER,
+            detail=f"Já existe um atleta cadastrado com o cpf: {atleta_in.cpf}.",
+        )
     return atleta_out
 
 
@@ -68,13 +75,29 @@ async def post(db_session: DataBaseDependency, atleta_in: AtletaIn = Body(...)) 
     "/",
     summary="Consultar todos os atletas",
     status_code=status.HTTP_200_OK,
-    response_model=list[AtletaOut],
+    response_model=Page[AtletaCustom],
 )
 async def get(
     db_session: DataBaseDependency,
-) -> list[AtletaOut]:
-    atletas: list[AtletaOut] = (await db_session.execute(select(AtletaModel))).scalars().all()
-    return [AtletaOut.model_validate(atleta) for atleta in atletas]
+    nome: Optional[str] = Query(None, description="Nome do atleta"),
+    cpf: Optional[str] = Query(None, description="CPF do atleta"),
+) -> list[AtletaCustom]:
+
+    query = select(AtletaModel)
+
+    if nome:
+        query = query.filter_by(nome=nome)
+    elif cpf:
+        query = query.filter_by(cpf=cpf)
+
+    atletas = (await db_session.execute(query)).scalars().all()
+    if not atletas:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Nenhum atleta encontrado.",
+        )
+
+    return paginate([AtletaCustom.model_validate(atleta) for atleta in atletas])
 
 
 @router.get(
